@@ -11,33 +11,15 @@ import (
 	"sync"
 	"time"
 
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/ecr"
-	"github.com/aws/aws-sdk-go-v2/service/ecrpublic"
 	"github.com/cenkalti/backoff"
 	docker "github.com/fsouza/go-dockerclient"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
 
-const (
-	ecrPublicRegistryPrefix = "public.ecr.aws"
-	ecrPublicRegion         = "us-east-1"
-)
-
 var (
 	config       Config
-	isPrivateECR bool
 )
-
-// ecrManager is an interface which defines the methods ECR private or public managers should implement.
-type ecrManager interface {
-	exists(name string) bool
-	ensure(name string) error
-	create(name string) error
-	buildCache(nextToken *string) error
-	buildCacheBackoff() backoff.Operation
-}
 
 // Config is the result of the parsed yaml file
 type Config struct {
@@ -101,8 +83,6 @@ func main() {
 		log.Fatal("Missing `target -> registry` yaml config")
 	}
 
-	isPrivateECR = !strings.HasPrefix(config.Target.Registry, ecrPublicRegistryPrefix)
-
 	if config.Workers == 0 {
 		config.Workers = runtime.NumCPU()
 	}
@@ -131,24 +111,6 @@ func main() {
 	}
 	log.Infof("Connected to Docker daemon: %s @ %s", info.Name, info.ServerVersion)
 
-	// init AWS client
-	log.Info("Creating AWS client")
-	cfg, err := awsconfig.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		log.Fatalf("Unable to load AWS SDK config, " + err.Error())
-	}
-
-	// pre-load ECR repositories
-	var ecrManager ecrManager
-
-	if !isPrivateECR {
-		// Override the AWS region with the ecrPublicRegion for ECR authentication.
-		cfg.Region = ecrPublicRegion
-		ecrManager = &ecrPublicManager{client: ecrpublic.NewFromConfig(cfg)}
-	} else {
-		ecrManager = &ecrPrivateManager{client: ecr.NewFromConfig(cfg)}
-	}
-
 	backoffSettings := backoff.NewExponentialBackOff()
 	backoffSettings.InitialInterval = 1 * time.Second
 	backoffSettings.MaxElapsedTime = 10 * time.Second
@@ -157,16 +119,12 @@ func main() {
 		log.Errorf("%v (%s)", err, d.String())
 	}
 
-	if err = backoff.RetryNotify(ecrManager.buildCacheBackoff(), backoffSettings, notifyError); err != nil {
-		log.Fatalf("Could not build ECR cache: %s", err)
-	}
-
 	workerCh := make(chan Repository, 5)
 	var wg sync.WaitGroup
 
 	// start background workers
 	for i := 0; i < config.Workers; i++ {
-		go worker(&wg, workerCh, &client, ecrManager)
+		go worker(&wg, workerCh, &client)
 	}
 
 	prefix := os.Getenv("PREFIX")
@@ -186,7 +144,7 @@ func main() {
 	log.Info("Done")
 }
 
-func worker(wg *sync.WaitGroup, workerCh chan Repository, dc *DockerClient, ecrm ecrManager) {
+func worker(wg *sync.WaitGroup, workerCh chan Repository, dc *DockerClient) {
 	log.Debug("Starting worker")
 
 	for {
@@ -205,8 +163,7 @@ func worker(wg *sync.WaitGroup, workerCh chan Repository, dc *DockerClient, ecrm
 			}
 
 			m := mirror{
-				dockerClient: dc,
-				ecrManager:   ecrm,
+				dockerClient: dc
 			}
 			if err := m.setup(repo); err != nil {
 				log.Errorf("Failed to setup mirror for repository %s: %s", repo.Name, err)
