@@ -163,7 +163,7 @@ func worker(wg *sync.WaitGroup, workerCh chan Repository, dc *DockerClient) {
 			}
 
 			m := mirror{
-				dockerClient: dc
+				dockerClient: dc,
 			}
 			if err := m.setup(repo); err != nil {
 				log.Errorf("Failed to setup mirror for repository %s: %s", repo.Name, err)
