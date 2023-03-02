@@ -114,10 +114,6 @@ func main() {
 	backoffSettings.InitialInterval = 1 * time.Second
 	backoffSettings.MaxElapsedTime = 10 * time.Second
 
-	notifyError := func(err error, d time.Duration) {
-		log.Errorf("%v (%s)", err, d.String())
-	}
-
 	workerCh := make(chan Repository, 5)
 	var wg sync.WaitGroup
 
