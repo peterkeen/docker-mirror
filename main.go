@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	config       Config
+	config Config
 )
 
 // Config is the result of the parsed yaml file
